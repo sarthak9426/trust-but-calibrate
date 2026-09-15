@@ -1,57 +1,54 @@
 # Calibrated AI-Text Detection
 
-**Turn an AI-text detector people trust blindly from ECE 0.45 to 0.04, and
-measure who it is unfair to - with the uncertainty stated out loud.**
+AI-text detectors hand you a confidence score, and people act on it - a "37% AI"
+reading can get a student accused of cheating. But no public benchmark checks
+whether that score is calibrated (does "37%" happen 37% of the time?) or whether
+it's biased against some writers. This is a small layer over one open detector
+(RoBERTa, where I have the raw logit) that does both: it turns the score into an
+honest probability, and it measures the detector's false-positive gap between
+native and non-native English writers. Both results are reproducible and
+leakage-audited.
 
-Open AI-text detectors output a confident-looking score that no public benchmark
-checks for reliability or subgroup fairness, yet that score is already used to
-accuse real people. This project wraps one open-weight detector (RoBERTa, whose
-raw logit we own) in a thin layer that (1) calibrates its score into an honest
-probability and (2) audits its false-positive gap between native and non-native
-English writers. Two results, both reproducible, both leakage-audited.
-
-## Result 1 - calibration
+## Calibration
 
 The raw RoBERTa detector is badly overconfident. On a leakage-audited,
-group-wise-split slice of MAGE its stated confidence is nowhere near its real
-accuracy: **ECE 0.448**. A Platt calibrator fit on held-out sources collapses
-that to **ECE 0.041** (Brier 0.421 -> 0.123).
+group-wise-split slice of MAGE its confidence is nowhere near its accuracy:
+Expected Calibration Error 0.448 (0 is perfect). A Platt calibrator fit on
+held-out sources drops that to 0.041 (Brier 0.421 -> 0.123).
 
 ![Reliability diagram: raw RoBERTa vs Platt-calibrated on MAGE](docs/reliability.png)
 
-The red curve (raw) sits far above the diagonal: a "10% machine" score really
-means ~85% machine. The green curve (calibrated) hugs the diagonal.
+The red curve (raw) sits far above the diagonal, so a "10% machine" score really
+means about 85%. The green curve (calibrated) sits on the diagonal.
 
-**Temperature scaling is not enough here.** The reflexive one-scalar fix only
-reaches ECE 0.34, because this slice is class-imbalanced and needs a *shift*, not
-just a rescale. Platt and isotonic (which learn a shift) both clear ECE < 0.05.
+Temperature scaling - the obvious one-scalar fix - only gets to ECE 0.34, because
+this slice is imbalanced and a single scalar can rescale the confidence but not
+shift it. Platt and isotonic both learn a shift and both clear 0.05.
 
 ```bash
 uv run python -m aitcal.scripts.run_m2 --limit 1500   # default calibrator: platt
 ```
 
-## Result 2 - fairness
+## Fairness
 
-Held to a 10% false-alarm rate on native writers, both detectors still flag most
-non-native (TOEFL) writers as machine. On the Liang 2023 essays (91 non-native
-TOEFL + 88 native Hewlett, all human):
+Every essay in the fairness set is human-written, so the only error a detector
+can make is a false positive. Held to a 10% false-alarm rate on native writers,
+both detectors still flag most non-native (TOEFL) writers as machine. On the
+Liang 2023 essays (91 non-native TOEFL + 88 native Hewlett, all human):
 
 | detector | FPR native | FPR non-native | gap (95% bootstrap CI) |
 |---|---|---|---|
-| GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | **+45.8%** [+23.8%, +67.8%] |
-| RoBERTa | 10.2% | 61.5% | **+51.3%** [+23.9%, +78.8%] |
+| GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | +45.8% [+23.8%, +67.8%] |
+| RoBERTa | 10.2% | 61.5% | +51.3% [+23.9%, +78.8%] |
 
-Both CIs exclude 0, so the observed gap is not noise at n~91/88 (95% bootstrap CI,
-with the native-anchored threshold refit inside every resample so the interval
-carries the operating-point uncertainty too). The GPT-2 log-perplexity detector
-is a deliberate positive control: non-native writing has higher perplexity, so a
-perplexity detector *must* penalize it. It does - which is how we know the audit
-catches a real gap rather than inventing one.
+Both CIs exclude 0, so the gap isn't noise at n~91/88. The native-anchored
+threshold is refit inside every bootstrap resample, so the interval carries the
+operating-point uncertainty too, not just the sampling noise in the predictions.
+The GPT-2 log-perplexity detector is a positive control: non-native prose has
+higher perplexity, so a perplexity detector has to penalize it. It does, which is
+how I know the audit catches a real gap rather than inventing one.
 
 ![Native vs non-native false-positive rate per detector, with bootstrap CIs](docs/fairness.png)
-
-The blue bars are pinned at the 10% native target; the red bars (non-native) tower
-over it, whiskers showing the bootstrap CI on the gap - well clear of parity.
 
 ```bash
 uv run python -m aitcal.scripts.run_m3 --detector perplexity
