@@ -11,6 +11,11 @@ dependencies = [
     "scikit-learn==1.5.2",
     "netcal==1.3.5",
     "scipy==1.14.1",
+    "datasets==3.1.0",
+    "matplotlib==3.9.2",
+    # datasets pulls pyarrow; pin to a version with prebuilt cp312 wheels so uv
+    # does not source-build a newer pyarrow (which drags in libcst -> Rust).
+    "pyarrow==17.0.0",
     # netcal -> torchvision -> pillow; pin to a version with prebuilt cp312
     # wheels so uv never falls back to a source build (which needs system jpeg).
     "pillow==10.4.0",
