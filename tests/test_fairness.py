@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from aitcal.eval.fairness import false_positive_rate, fpr_gap_bootstrap
+from aitcal.eval.fairness import (
+    false_positive_rate,
+    fpr_gap_bootstrap,
+    fpr_gap_bootstrap_scores,
+)
 
 
 def test_fpr_basic() -> None:
@@ -40,3 +44,37 @@ def test_ci_includes_zero_on_no_gap() -> None:
     res = fpr_gap_bootstrap(nn, na, n_boot=5000, seed=0)
     assert not res["excludes_zero"]
     assert res["ci_low"] < 0 < res["ci_high"]
+
+
+def _native_anchored(target=0.10):
+    return lambda nn_s, na_s: float(np.quantile(na_s, 1.0 - target))
+
+
+def test_score_bootstrap_hits_native_target() -> None:
+    # Native-anchored cut should put ~target of native scores above it.
+    rng = np.random.default_rng(0)
+    na = rng.normal(0, 1, size=200)
+    nn = rng.normal(1.5, 1, size=200)  # shifted up -> higher FPR
+    res = fpr_gap_bootstrap_scores(nn, na, _native_anchored(0.10), n_boot=2000, seed=0)
+    assert abs(res["fpr_native"] - 0.10) < 0.03
+    assert res["fpr_nonnative"] > res["fpr_native"]
+
+
+def test_score_bootstrap_ci_wider_than_fixed_threshold() -> None:
+    # Propagating threshold-selection variance must widen the CI vs. bootstrapping
+    # fixed predictions at a frozen cut. This is the whole point of fix #1.
+    rng = np.random.default_rng(0)
+    na = rng.normal(0, 1, size=120)
+    nn = rng.normal(1.2, 1, size=120)
+    tfn = _native_anchored(0.10)
+
+    score_res = fpr_gap_bootstrap_scores(nn, na, tfn, n_boot=8000, seed=0)
+
+    cut = tfn(nn, na)  # freeze the cut, then bootstrap predictions (old method)
+    fixed_res = fpr_gap_bootstrap(
+        (nn > cut).astype(int), (na > cut).astype(int), n_boot=8000, seed=0
+    )
+
+    score_width = score_res["ci_high"] - score_res["ci_low"]
+    fixed_width = fixed_res["ci_high"] - fixed_res["ci_low"]
+    assert score_width > fixed_width

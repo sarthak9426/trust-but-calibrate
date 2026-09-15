@@ -72,3 +72,26 @@ def test_group_wise_split_is_leak_free() -> None:
     assert audit["clean"]
     assert not (set(calib.groups) & set(test.groups))
     assert audit["text_overlap_count"] == 0
+
+
+def test_group_wise_split_catches_cross_group_text_leak() -> None:
+    # The SAME text appears in two different src groups. Whenever the split puts
+    # those two groups on opposite sides, the overlap-hash audit MUST catch it.
+    # (This is the negative case: proof the audit can actually fail, not just
+    # report clean when clean.)
+    shared = "identical essay text that leaked across two sources"
+    pool = Pool(
+        texts=[shared, "ga-only", shared, "gb-only"],
+        labels=np.array([1, 1, 0, 0]),
+        groups=["ga", "ga", "gb", "gb"],
+    )
+    caught = False
+    for seed in range(10):
+        _, _, audit = group_wise_split(pool, calib_frac=0.5, seed=seed)
+        if audit["n_calib_groups"] == 1:
+            # ga and gb landed on opposite sides -> the shared text crosses.
+            assert not audit["clean"]
+            assert audit["text_overlap_count"] >= 1
+            caught = True
+            break
+    assert caught, "no seed separated the two groups; test could not exercise the leak"
