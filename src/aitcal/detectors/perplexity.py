@@ -41,7 +41,10 @@ class LogPerplexityDetector:
         ).to(self.device)
         input_ids = enc["input_ids"]
         if input_ids.shape[1] < 2:
-            return 0.0  # too short to score; neutral
+            # Too short to score. The score scale is negative-mean-NLL (higher =
+            # more machine-like), so 0.0 would rank ABOVE every real essay and
+            # always flag machine. Return -inf: an unscored input is never flagged.
+            return float("-inf")
         with torch.no_grad():
             out = self._model(input_ids, labels=input_ids)
         # out.loss is the mean token NLL (cross-entropy). Lower NLL = lower

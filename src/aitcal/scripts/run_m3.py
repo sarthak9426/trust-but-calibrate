@@ -26,7 +26,7 @@ import argparse
 import numpy as np
 
 from aitcal.data.toefl import load_fairness_data
-from aitcal.eval.fairness import fpr_gap_bootstrap
+from aitcal.eval.fairness import fpr_gap_bootstrap_scores
 
 DETECTORS = ("roberta", "perplexity")
 
@@ -66,21 +66,29 @@ def audit_detector(
     if threshold_mode == "fixed":
         if threshold is None:
             raise ValueError("threshold is required in fixed mode")
-        thresh = threshold
-        desc = f"fixed raw score {thresh:.3f}"
+        cut = threshold
+
+        def threshold_fn(nn_s, na_s):  # externally given; constant per resample
+            return cut
+
+        desc = f"fixed raw score {cut:.3f}"
     elif threshold_mode == "median":
-        thresh = float(np.median(np.concatenate([nn_scores, na_scores])))
-        desc = f"combined median {thresh:.3f}"
-    else:  # native-fpr: cut at the (1 - target) quantile of native scores.
-        thresh = float(np.quantile(na_scores, 1.0 - target_native_fpr))
+        def threshold_fn(nn_s, na_s):
+            return float(np.median(np.concatenate([nn_s, na_s])))
+
+        desc = "combined median (refit per bootstrap resample)"
+    else:  # native-fpr: cut at the (1 - target) quantile of NATIVE scores.
+        def threshold_fn(nn_s, na_s):
+            return float(np.quantile(na_s, 1.0 - target_native_fpr))
+
         desc = (
             f"native-anchored (target native FPR {target_native_fpr:.0%}, "
-            f"cut {thresh:.3f})"
+            f"refit per bootstrap resample)"
         )
 
-    nn_pred = (nn_scores > thresh).astype(int)  # 1 = flagged machine (false positive)
-    na_pred = (na_scores > thresh).astype(int)
-    res = fpr_gap_bootstrap(nn_pred, na_pred, n_boot=n_boot, seed=seed)
+    res = fpr_gap_bootstrap_scores(
+        nn_scores, na_scores, threshold_fn, n_boot=n_boot, seed=seed
+    )
     res["threshold_desc"] = desc
     return res
 

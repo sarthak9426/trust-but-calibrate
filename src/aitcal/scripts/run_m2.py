@@ -63,9 +63,12 @@ def main(argv: list[str] | None = None) -> int:
         print("      ABORT: leakage detected across the split", file=sys.stderr)
         return 2
     # Re-derive logits per subset by group membership (stable, small pools).
+    # Both indices come from the split's own group sets, so a group the split
+    # ever drops lands in neither subset rather than leaking into test.
     calib_groups = set(calib.groups)
+    test_groups = set(test.groups)
     calib_idx = [i for i, g in enumerate(pool.groups) if g in calib_groups]
-    test_idx = [i for i, g in enumerate(pool.groups) if g not in calib_groups]
+    test_idx = [i for i, g in enumerate(pool.groups) if g in test_groups]
     calib_logits, calib_y = logits[calib_idx], pool.labels[calib_idx]
     test_logits, test_y = logits[test_idx], pool.labels[test_idx]
 

@@ -38,13 +38,15 @@ TOEFL + 88 native Hewlett, all human):
 
 | detector | FPR native | FPR non-native | gap (95% bootstrap CI) |
 |---|---|---|---|
-| GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | **+45.8%** [+33.7%, +57.9%] |
-| RoBERTa | 10.2% | 61.5% | **+51.3%** [+39.1%, +63.4%] |
+| GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | **+45.8%** [+23.8%, +67.8%] |
+| RoBERTa | 10.2% | 61.5% | **+51.3%** [+23.9%, +78.8%] |
 
-Both CIs exclude 0, so the gap is real at n~91/88, not noise. The GPT-2
-log-perplexity detector is a deliberate positive control: non-native writing has
-higher perplexity, so a perplexity detector *must* penalize it. It does - which
-is how we know the audit catches a real gap rather than inventing one.
+Both CIs exclude 0, so the observed gap is not noise at n~91/88 (95% bootstrap CI,
+with the native-anchored threshold refit inside every resample so the interval
+carries the operating-point uncertainty too). The GPT-2 log-perplexity detector
+is a deliberate positive control: non-native writing has higher perplexity, so a
+perplexity detector *must* penalize it. It does - which is how we know the audit
+catches a real gap rather than inventing one.
 
 ![Native vs non-native false-positive rate per detector, with bootstrap CIs](docs/fairness.png)
 
