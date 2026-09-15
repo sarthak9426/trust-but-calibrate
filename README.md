@@ -21,6 +21,27 @@ reflexive fix (a single scalar T) only reaches ECE 0.34, because this slice is
 class-imbalanced and needs a *shift*, not just a rescale. Platt and isotonic
 (which learn a shift) both clear ECE < 0.05.
 
+## Fairness result
+
+Held to a 10% false-alarm rate on native writers, the detectors still flag most
+non-native (TOEFL) writers as machine. On the Liang 2023 essays:
+
+| detector | FPR native | FPR non-native | gap (95% bootstrap CI) |
+|---|---|---|---|
+| GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | **+45.8%** [+33.7%, +57.9%] |
+| RoBERTa | 10.2% | 61.5% | **+51.3%** [+39.1%, +63.4%] |
+
+Both CIs exclude 0, so the gap is real, not noise, at n~91/88. The perplexity
+detector is a deliberate positive control: it is exactly the mechanism the bias
+literature indicts (non-native text has higher perplexity), so it must show a
+gap - and it does, which is how we know the audit catches a real one.
+
+Reproduce:
+
+```bash
+uv run python -m aitcal.scripts.run_m3 --detector perplexity
+```
+
 Reproduce:
 
 ```bash
@@ -45,7 +66,8 @@ benchmark measures for reliability or subgroup fairness. This project:
 - [x] M1 - `DetectorPort` + RoBERTa adapter emitting raw logits (smoke-tested).
 - [x] M2 - Calibrator (temperature / Platt / isotonic) + reliability diagram;
       ECE 0.448 -> 0.041 on a group-wise-split MAGE pool.
-- [ ] M3 - Fairness audit: FPR gap + bootstrap CIs on TOEFL, weak control.
+- [x] M3 - Fairness audit: native-vs-non-native FPR gap + bootstrap CIs on the
+      Liang 2023 TOEFL/Hewlett essays, with a weak log-perplexity positive control.
 
 Future work (deliberately cut): third-party API adapter, per-subgroup ECE,
 conformal abstention, serving API, a fine-tuned model.
@@ -66,11 +88,15 @@ and a MAGE slice.
 src/aitcal/
   detectors/port.py         # DetectorPort protocol (the one interface)
   detectors/roberta.py      # RoBERTa adapter -> raw logit
+  detectors/perplexity.py   # GPT-2 log-perplexity (weak fairness positive control)
   calibration/calibrator.py # temperature / Platt / isotonic
   eval/metrics.py           # ECE, Brier
   eval/reliability.py       # before/after reliability diagram
+  eval/fairness.py          # per-group FPR + bootstrap CI on the gap
   data/mage.py              # MAGE loader + group-wise split + leakage audit
+  data/toefl.py             # Liang 2023 TOEFL/Hewlett fairness essays
   data/sample.py            # tiny labeled sample for the M1 smoke test
   scripts/run_m2.py         # end-to-end M2: score -> split -> calibrate -> report
-tests/                      # smoke (M1) + calibration unit tests (M2)
+  scripts/run_m3.py         # end-to-end M3: FPR gap + bootstrap CI audit
+tests/                      # smoke (M1) + calibration (M2) + fairness (M3)
 ```
