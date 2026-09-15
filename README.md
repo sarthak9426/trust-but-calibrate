@@ -1,86 +1,111 @@
 # Calibrated AI-Text Detection
 
-A calibration + fairness-audit layer over one open-weight AI-text detector.
+**Turn an AI-text detector people trust blindly from ECE 0.45 to 0.04, and
+measure who it is unfair to - with the uncertainty stated out loud.**
 
-## Result
+Open AI-text detectors output a confident-looking score that no public benchmark
+checks for reliability or subgroup fairness, yet that score is already used to
+accuse real people. This project wraps one open-weight detector (RoBERTa, whose
+raw logit we own) in a thin layer that (1) calibrates its score into an honest
+probability and (2) audits its false-positive gap between native and non-native
+English writers. Two results, both reproducible, both leakage-audited.
 
-The RoBERTa AI-text detector is badly overconfident. On a leakage-audited,
-group-wise-split slice of MAGE it reports a confidence that is nowhere near its
-real accuracy - **ECE 0.448**. A Platt calibrator fit on held-out sources
-collapses that to **ECE 0.041** (Brier 0.421 -> 0.123), turning the raw score
-into a probability you can trust.
+## Result 1 - calibration
+
+The raw RoBERTa detector is badly overconfident. On a leakage-audited,
+group-wise-split slice of MAGE its stated confidence is nowhere near its real
+accuracy: **ECE 0.448**. A Platt calibrator fit on held-out sources collapses
+that to **ECE 0.041** (Brier 0.421 -> 0.123).
 
 ![Reliability diagram: raw RoBERTa vs Platt-calibrated on MAGE](docs/reliability.png)
 
-The red curve is the raw detector: it sits far above the diagonal, so a "10%
-machine" score really means ~85% machine. The green curve is calibrated: it
-hugs the diagonal.
+The red curve (raw) sits far above the diagonal: a "10% machine" score really
+means ~85% machine. The green curve (calibrated) hugs the diagonal.
 
-One finding worth its own line: **temperature scaling is not enough here.** The
-reflexive fix (a single scalar T) only reaches ECE 0.34, because this slice is
-class-imbalanced and needs a *shift*, not just a rescale. Platt and isotonic
-(which learn a shift) both clear ECE < 0.05.
+**Temperature scaling is not enough here.** The reflexive one-scalar fix only
+reaches ECE 0.34, because this slice is class-imbalanced and needs a *shift*, not
+just a rescale. Platt and isotonic (which learn a shift) both clear ECE < 0.05.
 
-## Fairness result
+```bash
+uv run python -m aitcal.scripts.run_m2 --limit 1500   # default calibrator: platt
+```
 
-Held to a 10% false-alarm rate on native writers, the detectors still flag most
-non-native (TOEFL) writers as machine. On the Liang 2023 essays:
+## Result 2 - fairness
+
+Held to a 10% false-alarm rate on native writers, both detectors still flag most
+non-native (TOEFL) writers as machine. On the Liang 2023 essays (91 non-native
+TOEFL + 88 native Hewlett, all human):
 
 | detector | FPR native | FPR non-native | gap (95% bootstrap CI) |
 |---|---|---|---|
 | GPT-2 log-perplexity (weak control) | 10.2% | 56.0% | **+45.8%** [+33.7%, +57.9%] |
 | RoBERTa | 10.2% | 61.5% | **+51.3%** [+39.1%, +63.4%] |
 
-Both CIs exclude 0, so the gap is real, not noise, at n~91/88. The perplexity
-detector is a deliberate positive control: it is exactly the mechanism the bias
-literature indicts (non-native text has higher perplexity), so it must show a
-gap - and it does, which is how we know the audit catches a real one.
+Both CIs exclude 0, so the gap is real at n~91/88, not noise. The GPT-2
+log-perplexity detector is a deliberate positive control: non-native writing has
+higher perplexity, so a perplexity detector *must* penalize it. It does - which
+is how we know the audit catches a real gap rather than inventing one.
 
-Reproduce:
+![Native vs non-native false-positive rate per detector, with bootstrap CIs](docs/fairness.png)
+
+The blue bars are pinned at the 10% native target; the red bars (non-native) tower
+over it, whiskers showing the bootstrap CI on the gap - well clear of parity.
 
 ```bash
 uv run python -m aitcal.scripts.run_m3 --detector perplexity
+uv run python -m aitcal.scripts.make_fairness_chart      # regenerate the chart
 ```
 
-Reproduce:
+## How it holds up (methodology notes)
 
-```bash
-uv sync --extra dev
-uv run python -m aitcal.scripts.run_m2 --limit 1500   # default calibrator: platt
-```
+Two choices that make the numbers honest rather than flattering:
 
-## What this is
+- **Leakage audit is a first-class output.** MAGE is split by `src` (domain +
+  generator) so no generator appears in both the calibration and test set, and an
+  overlap-hash check asserts the split is clean before any metric is reported.
+  Cross-source contamination silently inflates every calibration number
+  otherwise.
+- **The fairness threshold is native-anchored, not median.** A combined-median
+  cut inflates both groups' absolute FPRs toward 50% by construction, so the
+  audit reports at a native-anchored operating point (tune the cut so native FPR
+  is ~10%, then read off non-native). The gap is the signal; the absolute rates
+  are stated with their operating point, never quoted bare.
 
-Open AI-text detectors emit an overconfident, uncalibrated score that no
-benchmark measures for reliability or subgroup fairness. This project:
+Data label orientations were verified from live rows, not assumed: MAGE labels
+human as 1 (we flip to 1 = machine); the RoBERTa checkpoint is `{0: Fake, 1:
+Real}` (read from config, not hardcoded).
 
-1. **Calibrates** one open detector (RoBERTa, whose raw logit we own) to a
-   probability with a known error rate - ECE/Brier + reliability diagram on a
-   group-wise-split MAGE pool.
-2. **Audits** its native-vs-non-native false-positive gap with bootstrap
-   confidence intervals on the Stanford TOEFL set, including a deliberately weak
-   log-perplexity detector as a positive control.
+## Novelty
 
-## Status
+No public AI-text-detector benchmark (MAGE, RAID) reports ECE or a subgroup
+fairness gap. Closest prior work, cited and differentiated: MCP (ACL 2025,
+conformal-for-FPR, not calibration) and Markov-Informed Calibration (token-level
+score refinement, not confidence calibration). The composition of calibration +
+subgroup fairness with reliability diagnostics is unoccupied.
 
-- [x] M1 - `DetectorPort` + RoBERTa adapter emitting raw logits (smoke-tested).
-- [x] M2 - Calibrator (temperature / Platt / isotonic) + reliability diagram;
+## Milestones
+
+- [x] **M1** - `DetectorPort` + RoBERTa adapter emitting raw logits (smoke-tested).
+- [x] **M2** - Calibrator (temperature / Platt / isotonic) + reliability diagram;
       ECE 0.448 -> 0.041 on a group-wise-split MAGE pool.
-- [x] M3 - Fairness audit: native-vs-non-native FPR gap + bootstrap CIs on the
+- [x] **M3** - Fairness audit: native-vs-non-native FPR gap + bootstrap CIs on the
       Liang 2023 TOEFL/Hewlett essays, with a weak log-perplexity positive control.
 
-Future work (deliberately cut): third-party API adapter, per-subgroup ECE,
-conformal abstention, serving API, a fine-tuned model.
+Deliberately cut to future work: third-party API adapter (an opaque "% AI" is not
+a logit you can calibrate), per-subgroup ECE (n~91 cannot support the bins),
+conformal abstention with a stated risk guarantee, a serving API, and a
+fine-tuned own-model proven on the same harness.
 
 ## Setup
 
 ```bash
 uv sync --extra dev
-uv run pytest            # M1 smoke + M2 unit tests
+uv run pytest            # M1 smoke + M2 calibration + M3 fairness (12 tests)
 ```
 
-First run of the M2 script downloads `openai-community/roberta-base-openai-detector`
-and a MAGE slice.
+The M2 and M3 scripts download `openai-community/roberta-base-openai-detector`
+(and `gpt2` for the perplexity control), a MAGE slice, and the Liang essays on
+first run; datasets are cached locally and git-ignored.
 
 ## Layout
 
@@ -93,10 +118,12 @@ src/aitcal/
   eval/metrics.py           # ECE, Brier
   eval/reliability.py       # before/after reliability diagram
   eval/fairness.py          # per-group FPR + bootstrap CI on the gap
+  eval/fairness_plot.py     # native vs non-native FPR bar chart
   data/mage.py              # MAGE loader + group-wise split + leakage audit
   data/toefl.py             # Liang 2023 TOEFL/Hewlett fairness essays
   data/sample.py            # tiny labeled sample for the M1 smoke test
   scripts/run_m2.py         # end-to-end M2: score -> split -> calibrate -> report
   scripts/run_m3.py         # end-to-end M3: FPR gap + bootstrap CI audit
+  scripts/make_fairness_chart.py  # render docs/fairness.png across both detectors
 tests/                      # smoke (M1) + calibration (M2) + fairness (M3)
 ```

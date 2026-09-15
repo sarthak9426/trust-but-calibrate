@@ -43,6 +43,48 @@ def _build_detector(name: str):
     raise ValueError(f"unknown detector {name!r}")
 
 
+def audit_detector(
+    name: str,
+    threshold_mode: str = "native-fpr",
+    target_native_fpr: float = 0.10,
+    threshold: float | None = None,
+    n_boot: int = 10000,
+    seed: int = 0,
+    data=None,
+) -> dict:
+    """Score both groups with `name`, pick an operating point, bootstrap the gap.
+
+    Returns the fpr_gap_bootstrap result dict plus `threshold_desc`. Shared by
+    main() and the chart script so the thresholding logic lives in one place.
+    """
+    if data is None:
+        data = load_fairness_data()
+    det = _build_detector(name)
+    nn_scores = np.array(det.score_batch(data.nonnative), dtype=float)
+    na_scores = np.array(det.score_batch(data.native), dtype=float)
+
+    if threshold_mode == "fixed":
+        if threshold is None:
+            raise ValueError("threshold is required in fixed mode")
+        thresh = threshold
+        desc = f"fixed raw score {thresh:.3f}"
+    elif threshold_mode == "median":
+        thresh = float(np.median(np.concatenate([nn_scores, na_scores])))
+        desc = f"combined median {thresh:.3f}"
+    else:  # native-fpr: cut at the (1 - target) quantile of native scores.
+        thresh = float(np.quantile(na_scores, 1.0 - target_native_fpr))
+        desc = (
+            f"native-anchored (target native FPR {target_native_fpr:.0%}, "
+            f"cut {thresh:.3f})"
+        )
+
+    nn_pred = (nn_scores > thresh).astype(int)  # 1 = flagged machine (false positive)
+    na_pred = (na_scores > thresh).astype(int)
+    res = fpr_gap_bootstrap(nn_pred, na_pred, n_boot=n_boot, seed=seed)
+    res["threshold_desc"] = desc
+    return res
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="M3: native-vs-non-native FPR audit.")
     ap.add_argument("--detector", default="perplexity", choices=DETECTORS)
@@ -74,34 +116,17 @@ def main(argv: list[str] | None = None) -> int:
           f"native (Hewlett): {len(data.native)}")
 
     print(f"[2/3] scoring with '{args.detector}' (raw machine-likeness score)")
-    det = _build_detector(args.detector)
-    nn_scores = np.array(det.score_batch(data.nonnative), dtype=float)
-    na_scores = np.array(det.score_batch(data.native), dtype=float)
+    res = audit_detector(
+        args.detector,
+        threshold_mode=args.threshold_mode,
+        target_native_fpr=args.target_native_fpr,
+        threshold=args.threshold,
+        n_boot=args.n_boot,
+        seed=args.seed,
+        data=data,
+    )
 
-    # Pick the operating point.
-    if args.threshold_mode == "fixed":
-        if args.threshold is None:
-            ap.error("--threshold is required in fixed mode")
-        thresh = args.threshold
-        thresh_desc = f"fixed raw score {thresh:.3f}"
-    elif args.threshold_mode == "median":
-        thresh = float(np.median(np.concatenate([nn_scores, na_scores])))
-        thresh_desc = f"combined median {thresh:.3f}"
-    else:  # native-fpr: tune the cut so the NATIVE group's FPR hits the target.
-        # Native FPR = fraction of native scores above the cut. To get a target
-        # native FPR t, set the cut at the (1 - t) quantile of native scores.
-        q = 1.0 - args.target_native_fpr
-        thresh = float(np.quantile(na_scores, q))
-        thresh_desc = (
-            f"native-anchored (target native FPR {args.target_native_fpr:.0%}, "
-            f"cut {thresh:.3f})"
-        )
-
-    nn_pred = (nn_scores > thresh).astype(int)  # 1 = flagged machine (false positive)
-    na_pred = (na_scores > thresh).astype(int)
-
-    print(f"[3/3] FPR gap + bootstrap CI (threshold: {thresh_desc})")
-    res = fpr_gap_bootstrap(nn_pred, na_pred, n_boot=args.n_boot, seed=args.seed)
+    print(f"[3/3] FPR gap + bootstrap CI (threshold: {res['threshold_desc']})")
     print(f"      FPR non-native = {res['fpr_nonnative']:.1%}  (n={res['n_nonnative']})")
     print(f"      FPR native     = {res['fpr_native']:.1%}  (n={res['n_native']})")
     print(f"      gap            = {res['gap']:+.1%}  "
